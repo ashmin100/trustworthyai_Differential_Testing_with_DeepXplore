@@ -85,7 +85,9 @@ def deepxplore_generation(model1_wrapper, model2_wrapper, seed_img, orig_label, 
     # DeepXplore (SOSP 2017) 논문 참고   
     # 뉴런 커버리지는 소프트웨어 테스트의 statement coverage와 대응되는 개념입니다.
     # 특정 뉴런의 활성값(ReLU 거친 값 vk,i)이 0보다 크면(threshold=0) 해당 뉴런이 '커버(covered)'되었다고 간주합니다.
-    threshold = 0.0 # uk,i > 0 이면 커버된 것.
+    # 0인 버전과 0.1인 버전 둘다 실험 예정. 
+    # threshold = 0.1 # uk,i > 0.1 이면 커버된 것.
+    threshold = 0.1 # uk,i > 0 이면 커버된 것.
     
     covered_neurons_m1 = set()
     covered_neurons_m2 = set()
