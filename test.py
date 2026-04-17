@@ -82,8 +82,11 @@ def deepxplore_generation(model1_wrapper, model2_wrapper, seed_img, orig_label, 
     img = seed_img.clone().detach().to(device)
     img.requires_grad_(True)
     
-    # 이미지 생성 과정 중 새롭게 활성화된 뉴런들을 저장합니다. (뉴런 커버리지 테이블)
-    # 특정 뉴런의 활성값이 threshold를 초과하면 해당 뉴런이 '커버(covered)'되었다고 간주합니다.
+    # DeepXplore (SOSP 2017) 논문 참고   
+    # 뉴런 커버리지는 소프트웨어 테스트의 statement coverage와 대응되는 개념입니다.
+    # 특정 뉴런의 활성값(ReLU 거친 값 vk,i)이 0보다 크면(threshold=0) 해당 뉴런이 '커버(covered)'되었다고 간주합니다.
+    threshold = 0.0 # uk,i > 0 이면 커버된 것.
+    
     covered_neurons_m1 = set()
     covered_neurons_m2 = set()
     
@@ -94,7 +97,8 @@ def deepxplore_generation(model1_wrapper, model2_wrapper, seed_img, orig_label, 
         pred1 = out1.argmax(dim=1).item()
         pred2 = out2.argmax(dim=1).item()
         
-        # 모든 ReLU 레이어에 대해 공간 차원 평균을 내서 활성/미활성을 추적합니다.
+        # NC(T) = |Cov(T)| / 총 뉴런 수 
+        # CNN의 경우 공간 차원(H, W) 평균을 구한 뒤 활성 여부(> 0)를 판단합니다.
         for layer_name, act1 in model1_wrapper.activations.items():
             if act1.dim() == 4: # 컨볼루션 계층 (B, C, H, W)
                 active1 = (act1.mean(dim=(2,3)) > threshold).nonzero()
@@ -227,7 +231,7 @@ def main():
         if success:
             discrepancies_found += 1
             print(f"성공! 모델 예측 불일치 이미지를 생성했습니다. M1 예측: {classes[fpred1]}, M2 예측: {classes[fpred2]}")
-            print(f"전체 뉴런(ReLU) 채널 커버리지 - M1: {cov1}개 커버됨, M2: {cov2}개 커버됨")
+            print(f"Chapter 5 기준: 전체 뉴런(ReLU) 커버리지 도달 확인 - M1: {cov1}개 커버됨, M2: {cov2}개 커버됨")
             
             # 시각화 후 저장
             orig_vis = deprocess_image(seed_img[0])
