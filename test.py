@@ -139,3 +139,123 @@ def deepxplore_generation(model1_wrapper, model2_wrapper, seed_img, orig_label, 
         img.requires_grad_(True)
         
     return img, pred1, pred2, len(covered_neurons_m1), len(covered_neurons_m2), False
+
+
+
+def main():
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+    print(f"사용 장치(Device): {device}")
+    
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    print("CIFAR-10 데이터셋 로드 중...")
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=256, shuffle=True, num_workers=2)
+
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+    
+    # 10개 클래스 레이블 매핑
+    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+    # 두 개의 ResNet50 모델 생성
+    model1 = get_resnet50().to(device)
+    model2 = get_resnet50().to(device)
+    
+    if os.path.exists("model1.pt") and os.path.exists("model2.pt"):
+        print("기존에 학습된 모델(model1.pt, model2.pt)을 불러옵니다...")
+        model1.load_state_dict(torch.load("model1.pt", map_location=device))
+        model2.load_state_dict(torch.load("model2.pt", map_location=device))
+    else:
+        print("초기화 가중치가 서로 다른 모델 두 개를 생성하여 각 1 에포크씩 훈련합니다...")
+        # 두 모델이 서로 의미 있는 차이를 발생시키도록 시드를 설정합니다
+        torch.manual_seed(10)
+        model1 = get_resnet50().to(device)
+        torch.manual_seed(20)
+        model2 = get_resnet50().to(device)
+        # 매우 적은 훈련만 거쳐도 테스트와 불일치 생성이 가능해집니다.
+        train_model(model1, trainloader, device, epochs=1, name="model1")
+        train_model(model2, trainloader, device, epochs=1, name="model2")
+        
+    model1.eval()
+    model2.eval()
+    
+    # 모델에 중간 레이어 Hook 을 부착하기 위한 Wrapper 클래스 생성
+    model1_wrapper = ModelWithHooks(model1)
+    model2_wrapper = ModelWithHooks(model2)
+
+    os.makedirs("results", exist_ok=True)
+    
+    discrepancies_found = 0
+    target_discrepancies = 5
+    
+    print("DeepXplore 차이점 테스트(Differential Testing) 생성을 시작합니다...")
+    # 테스트 셋 이미지들을 무작위 순서로 섞어서 시드(seed) 이미지로 사용
+    indices = torch.randperm(len(testset))
+    
+    for idx in indices:
+        seed_img, orig_label = testset[idx]
+        seed_img = seed_img.unsqueeze(0).to(device)
+        
+        # 노이즈를 섞기 전 초기 예측 결과 확인
+        out1 = model1(seed_img)
+        out2 = model2(seed_img)
+        pred1 = out1.argmax(dim=1).item()
+        pred2 = out2.argmax(dim=1).item()
+        
+        if pred1 != pred2:
+            print(f"해당 이미지 번호 {idx} 에서는 두 모델이 이미 다른 예측을 하고 있습니다. (M1: {classes[pred1]}, M2: {classes[pred2]}). 스킵합니다.")
+            continue
+            
+        print(f"\n시드 이미지 평가 중 - 인덱스 번호 {idx} (실제 정답 레이블: {classes[orig_label]})")
+        
+        # DeepXplore 이미지 생성 진행
+        gen_img, fpred1, fpred2, cov1, cov2, success = deepxplore_generation(
+            model1_wrapper, model2_wrapper, seed_img, orig_label, 
+            threshold=0.1, weight_diff=0.5, weight_nc=0.1, step_size=0.01, iters=30, device=device
+        )
+        
+        if success:
+            discrepancies_found += 1
+            print(f"성공! 모델 예측 불일치 이미지를 생성했습니다. M1 예측: {classes[fpred1]}, M2 예측: {classes[fpred2]}")
+            print(f"전체 뉴런(ReLU) 채널 커버리지 - M1: {cov1}개 커버됨, M2: {cov2}개 커버됨")
+            
+            # 시각화 후 저장
+            orig_vis = deprocess_image(seed_img[0])
+            gen_vis = deprocess_image(gen_img[0])
+            noise_vis = gen_vis - orig_vis
+            # 노이즈 변경점이 명확히 보이도록 동적 스케일링
+            noise_vis = (noise_vis - np.min(noise_vis)) / (np.max(noise_vis) - np.min(noise_vis) + 1e-5)
+            
+            fig, ax = plt.subplots(1, 3, figsize=(10, 4))
+            ax[0].imshow(orig_vis)
+            ax[0].set_title(f"Original (Pred: {classes[pred1]})")
+            ax[0].axis('off')
+            
+            ax[1].imshow(gen_vis)
+            ax[1].set_title(f"Perturbed (M1:{classes[fpred1]} M2:{classes[fpred2]})")
+            ax[1].axis('off')
+            
+            ax[2].imshow(noise_vis)
+            ax[2].set_title("Perturbation Noise")
+            ax[2].axis('off')
+            
+            plt.tight_layout()
+            plt.savefig(f"results/disagreement_{discrepancies_found}.png")
+            plt.close()
+            
+            if discrepancies_found >= target_discrepancies:
+                print(f"목표한 {target_discrepancies}개의 모델 불일치 결과 이미지를 성공적으로 찾았습니다.")
+                break
+                
+if __name__ == "__main__":
+    main()
