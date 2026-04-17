@@ -202,6 +202,10 @@ def main():
     discrepancies_found = 0
     target_discrepancies = 5
     
+    # 커버리지 변화량을 추적하여 차트로 그리기 위한 리스트 초기화
+    m1_cov_history = []
+    m2_cov_history = []
+    
     print("DeepXplore 차이점 테스트(Differential Testing) 생성을 시작합니다...")
     # 테스트 셋 이미지들을 무작위 순서로 섞어서 시드(seed) 이미지로 사용
     indices = torch.randperm(len(testset))
@@ -262,8 +266,33 @@ def main():
             plt.savefig(f"results/disagreement_{discrepancies_found}.png", dpi=300, bbox_inches='tight')
             plt.close()
             
+            # 성공한 이미지에 대한 커버리지 기록
+            m1_cov_history.append(cov1)
+            m2_cov_history.append(cov2)
+            
             if discrepancies_found >= target_discrepancies:
                 print(f"목표한 {target_discrepancies}개의 모델 불일치 결과 이미지를 성공적으로 찾았습니다.")
+                
+                # 최종 커버리지 요약 차트(Bar Chart) 시각화 및 저장
+                print("최종 커버리지 요약 차트를 생성 중입니다...")
+                plt.figure(figsize=(10, 6), dpi=300)
+                indices_arr = np.arange(1, target_discrepancies + 1)
+                bar_width = 0.35
+                
+                plt.bar(indices_arr - bar_width/2, m1_cov_history, width=bar_width, label='Model 1 Coverage', color='#4C72B0')
+                plt.bar(indices_arr + bar_width/2, m2_cov_history, width=bar_width, label='Model 2 Coverage', color='#DD8452')
+                
+                plt.title("Neuron Coverage per Disagreement Image", fontsize=16)
+                plt.xlabel("Generated Adversarial Image Index", fontsize=14)
+                plt.ylabel("Number of Activated Neurons (Coverage)", fontsize=14)
+                plt.xticks(indices_arr, [f"Img {i}" for i in indices_arr])
+                plt.legend(fontsize=12)
+                plt.grid(axis='y', linestyle='--', alpha=0.7)
+                
+                plt.tight_layout()
+                plt.savefig("results/coverage_summary_chart.png", dpi=300, bbox_inches='tight')
+                plt.close()
+                print("차트 생성이 완료되었습니다: results/coverage_summary_chart.png")
                 break
                 
 if __name__ == "__main__":
