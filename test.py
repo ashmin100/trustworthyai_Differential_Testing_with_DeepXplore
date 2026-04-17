@@ -234,8 +234,13 @@ def main():
         
         if success:
             discrepancies_found += 1
+            # 동적으로 추적된 전체 채널(뉴런) 수 계산
+            total_neurons = sum(act.shape[1] for act in model1_wrapper.activations.values() if act.dim() == 4)
+            cov1_pct = (cov1 / total_neurons) * 100
+            cov2_pct = (cov2 / total_neurons) * 100
+            
             print(f"성공! 모델 예측 불일치 이미지를 생성했습니다. M1 예측: {classes[fpred1]}, M2 예측: {classes[fpred2]}")
-            print(f"Chapter 5 기준: 전체 뉴런(ReLU) 커버리지 도달 확인 - M1: {cov1}개 커버됨, M2: {cov2}개 커버됨")
+            print(f"Chapter 5 기준: 전체 뉴런(ReLU) 커버리지 도달 확인 - M1: {cov1}개 ({cov1_pct:.2f}%), M2: {cov2}개 ({cov2_pct:.2f}%)")
             
             # 시각화 후 저장
             orig_vis = deprocess_image(seed_img[0])
@@ -266,27 +271,36 @@ def main():
             plt.savefig(f"results/disagreement_{discrepancies_found}.png", dpi=300, bbox_inches='tight')
             plt.close()
             
-            # 성공한 이미지에 대한 커버리지 기록
-            m1_cov_history.append(cov1)
-            m2_cov_history.append(cov2)
+            # 성공한 이미지에 대한 커버리지 기록 (백분율 값 저장)
+            m1_cov_history.append(cov1_pct)
+            m2_cov_history.append(cov2_pct)
             
             if discrepancies_found >= target_discrepancies:
                 print(f"목표한 {target_discrepancies}개의 모델 불일치 결과 이미지를 성공적으로 찾았습니다.")
                 
-                # 최종 커버리지 요약 차트(Bar Chart) 시각화 및 저장
-                print("최종 커버리지 요약 차트를 생성 중입니다...")
+                # 최종 커버리지 비율 차트(Bar Chart) 시각화 및 저장
+                print("최종 커버리지 비율 요약 차트를 생성 중입니다...")
                 plt.figure(figsize=(10, 6), dpi=300)
                 indices_arr = np.arange(1, target_discrepancies + 1)
                 bar_width = 0.35
                 
-                plt.bar(indices_arr - bar_width/2, m1_cov_history, width=bar_width, label='Model 1 Coverage', color='#4C72B0')
-                plt.bar(indices_arr + bar_width/2, m2_cov_history, width=bar_width, label='Model 2 Coverage', color='#DD8452')
+                bars1 = plt.bar(indices_arr - bar_width/2, m1_cov_history, width=bar_width, label='Model 1 (%)', color='#4C72B0')
+                bars2 = plt.bar(indices_arr + bar_width/2, m2_cov_history, width=bar_width, label='Model 2 (%)', color='#DD8452')
                 
-                plt.title("Neuron Coverage per Disagreement Image", fontsize=16)
+                # 막대 그래프 위에 정확한 % 수치 텍스트 부착
+                for bar in bars1:
+                    yval = bar.get_height()
+                    plt.text(bar.get_x() + bar.get_width()/2, yval + 0.5, f"{yval:.1f}%", ha='center', va='bottom', fontsize=10)
+                for bar in bars2:
+                    yval = bar.get_height()
+                    plt.text(bar.get_x() + bar.get_width()/2, yval + 0.5, f"{yval:.1f}%", ha='center', va='bottom', fontsize=10)
+                
+                plt.title("Neuron Coverage Percentage per Disagreement Image", fontsize=16)
                 plt.xlabel("Generated Adversarial Image Index", fontsize=14)
-                plt.ylabel("Number of Activated Neurons (Coverage)", fontsize=14)
+                plt.ylabel("Neuron Coverage (%)", fontsize=14)
+                plt.ylim(0, max(max(m1_cov_history), max(m2_cov_history)) + 10) # y축을 %가 잘 보이도록 조금 더 높게 확보
                 plt.xticks(indices_arr, [f"Img {i}" for i in indices_arr])
-                plt.legend(fontsize=12)
+                plt.legend(fontsize=12, loc='lower right')
                 plt.grid(axis='y', linestyle='--', alpha=0.7)
                 
                 plt.tight_layout()
