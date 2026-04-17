@@ -44,3 +44,98 @@ def train_model(model, trainloader, device, epochs=1, name="model"):
                 running_loss = 0.0
     print(f"{name} 학습 완료")
     torch.save(model.state_dict(), f"{name}.pt")
+
+# DeepXplore 구현을 위한 보조 함수
+def deprocess_image(tensor):
+    # 역정규화를 진행하여 이미지 시각화가 가능하도록 복원합니다.
+    MEAN = torch.tensor([0.4914, 0.4822, 0.4465]).view(3, 1, 1).to(tensor.device)
+    STD = torch.tensor([0.2023, 0.1994, 0.2010]).view(3, 1, 1).to(tensor.device)
+    img = tensor * STD + MEAN
+    img = torch.clamp(img, 0, 1)
+    return img.cpu().detach().permute(1, 2, 0).numpy()
+
+class ModelWithHooks:
+    def __init__(self, model):
+        self.model = model
+        self.activations = {}
+        # 전체 신경망 커버리지를 측정하기 위해 모든 ReLU 레이어에 Hook을 부착합니다.
+        self._register_hooks(self.model, prefix="")
+        
+    def _register_hooks(self, module, prefix):
+        for name, child in module.named_children():
+            full_name = f"{prefix}_{name}" if prefix else name
+            if isinstance(child, nn.ReLU):
+                child.register_forward_hook(self._get_activation(full_name))
+            else:
+                self._register_hooks(child, full_name)
+        
+    def _get_activation(self, name):
+        def hook(model, input, output):
+            self.activations[name] = output
+        return hook
+        
+    def __call__(self, x):
+        return self.model(x)
+
+def deepxplore_generation(model1_wrapper, model2_wrapper, seed_img, orig_label, threshold=0.1, weight_diff=1.0, weight_nc=0.1, step_size=0.01, iters=50, device='cpu'):
+    # DeepXplore의 목표: 뉴런 커버리지를 최대화하면서 기투자된 모델 두 개 간의 예측값 차이를 유도하는 것
+    img = seed_img.clone().detach().to(device)
+    img.requires_grad_(True)
+    
+    # 이미지 생성 과정 중 새롭게 활성화된 뉴런들을 저장합니다. (뉴런 커버리지 테이블)
+    # 특정 뉴런의 활성값이 threshold를 초과하면 해당 뉴런이 '커버(covered)'되었다고 간주합니다.
+    covered_neurons_m1 = set()
+    covered_neurons_m2 = set()
+    
+    for i in range(iters):
+        out1 = model1_wrapper(img)
+        out2 = model2_wrapper(img)
+        
+        pred1 = out1.argmax(dim=1).item()
+        pred2 = out2.argmax(dim=1).item()
+        
+        # 모든 ReLU 레이어에 대해 공간 차원 평균을 내서 활성/미활성을 추적합니다.
+        for layer_name, act1 in model1_wrapper.activations.items():
+            if act1.dim() == 4: # 컨볼루션 계층 (B, C, H, W)
+                active1 = (act1.mean(dim=(2,3)) > threshold).nonzero()
+                for idx in active1:
+                    covered_neurons_m1.add(f"{layer_name}_{idx[1].item()}")
+            
+        for layer_name, act2 in model2_wrapper.activations.items():
+            if act2.dim() == 4:
+                active2 = (act2.mean(dim=(2,3)) > threshold).nonzero()
+                for idx in active2:
+                    covered_neurons_m2.add(f"{layer_name}_{idx[1].item()}")
+
+        print(f"반복(Iter) {i}: 예측1={pred1}, 예측2={pred2}, 커버리지 1={len(covered_neurons_m1)}, 커버리지 2={len(covered_neurons_m2)}")
+
+        if pred1 != pred2:
+            # 두 모델 사이에 불일치(Discrepancy) 시점 발견 조기 종료!
+            return img, pred1, pred2, len(covered_neurons_m1), len(covered_neurons_m2), True
+            
+        # 미활성화 뉴런을 활성화하도록 모든 계층의 활성도 총합을 목적함수에 반영합니다.
+        loss1_neuron = sum(act.mean() for act in model1_wrapper.activations.values())
+        loss2_neuron = sum(act.mean() for act in model2_wrapper.activations.values())
+        
+        # 주 목적함수: model2는 여전히 원본 정답을 예측하게 하면서, 
+        # model1의 예측값은 정답이 아니게 되도록 (음수로) 손실 함수를 형성합니다.
+        loss_diff = out2[0, orig_label] - out1[0, orig_label] * weight_diff
+        
+        # 최종적으로 커버리지 가중치를 더해줍니다.
+        loss = loss_diff + weight_nc * (loss1_neuron + loss2_neuron)
+        
+        # 손실 함수를 최대화하는 방향으로 기울기 계산 (Gradient Ascent)
+        model1_wrapper.model.zero_grad()
+        model2_wrapper.model.zero_grad()
+        if img.grad is not None:
+            img.grad.zero_()
+        
+        loss.backward()
+        
+        # 경사 상승법(Gradient Ascent) 적용 - 입력 이미지 업데이트
+        with torch.no_grad():
+            img += step_size * torch.sign(img.grad) # 보다 빠르고 강한 생성을 위해 기울기 부호(Sign) 활용
+            
+        img.requires_grad_(True)
+        
+    return img, pred1, pred2, len(covered_neurons_m1), len(covered_neurons_m2), False
