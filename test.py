@@ -240,21 +240,26 @@ def main():
             # 노이즈 변경점이 명확히 보이도록 동적 스케일링
             noise_vis = (noise_vis - np.min(noise_vis)) / (np.max(noise_vis) - np.min(noise_vis) + 1e-5)
             
-            fig, ax = plt.subplots(1, 3, figsize=(10, 4))
-            ax[0].imshow(orig_vis)
-            ax[0].set_title(f"Original (Pred: {classes[pred1]})")
+            # 시각화 해상도 및 퀄리티 업그레이드 
+            # figsize를 키우고, 폰트 크기를 늘리며, 고해상도 저장을 위해 dpi를 적용합니다.
+            fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+            
+            # CIFAR-10 32x32 미니 이미지가 강제로 늘어날 때 뿌옇게 흐려지는 것을 방지(픽셀 선명도 유지)
+            ax[0].imshow(orig_vis, interpolation='nearest')
+            ax[0].set_title(f"Original (Pred: {classes[pred1]})", fontsize=14, pad=10)
             ax[0].axis('off')
             
-            ax[1].imshow(gen_vis)
-            ax[1].set_title(f"Perturbed (M1:{classes[fpred1]} M2:{classes[fpred2]})")
+            ax[1].imshow(gen_vis, interpolation='nearest')
+            ax[1].set_title(f"Perturbed (M1:{classes[fpred1]} M2:{classes[fpred2]})", fontsize=14, pad=10)
             ax[1].axis('off')
             
-            ax[2].imshow(noise_vis)
-            ax[2].set_title("Perturbation Noise")
+            ax[2].imshow(noise_vis, interpolation='nearest')
+            ax[2].set_title("Perturbation Noise", fontsize=14, pad=10)
             ax[2].axis('off')
             
             plt.tight_layout()
-            plt.savefig(f"results/disagreement_{discrepancies_found}.png")
+            # dpi=300 옵션으로 학술 논문 수준의 고화질 이미지(PNG)로 저장합니다.
+            plt.savefig(f"results/disagreement_{discrepancies_found}.png", dpi=300, bbox_inches='tight')
             plt.close()
             
             if discrepancies_found >= target_discrepancies:
